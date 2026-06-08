@@ -1,4 +1,5 @@
 import Droppable from '#/components/drag-n-drop/Droppable'
+import type { Square } from '#/components/puzzle/Piece'
 import Piece from '#/components/puzzle/Piece'
 import { BORDER_SIZE, PUZZLE_SIZE } from '#/constants/dragAndDropConstants'
 import { DragDropProvider } from '@dnd-kit/react'
@@ -7,100 +8,98 @@ import { useRef, useState } from 'react'
 
 export const Route = createFileRoute('/')({ component: Home })
 
-const PIECE_SQUARES = ['a1', 'b1', 'b2']
+const INITIAL_SQUARES: Square[] = [
+  [1, 1],
+  [2, 1],
+  [2, 2],
+]
 const PIECE_ID = 'piece-0'
 
-const LetterMap: Record<string, number> = {
-  a: 1,
-  b: 2,
-  c: 3,
-  d: 4,
-  e: 5,
-  f: 6,
-  g: 7,
-  h: 8,
-  i: 9,
-  j: 10,
+function toOffsets(squares: Square[], grabbedIndex: number): Square[] {
+  const [grabRow, grabCol] = squares[grabbedIndex]
+  return squares.map(([r, c]) => [r - grabRow, c - grabCol])
 }
 
-/** Parse squares into 0-based [row, col] offsets anchored at top-left of piece */
-function parseSquareOffsets(squares: string[]): Array<[number, number]> {
-  const parsed = squares.map(
-    (sq) =>
-      [(LetterMap[sq[0]] ?? 1) - 1, Number(sq[1]) - 1] as [number, number],
-  )
-  const minRow = Math.min(...parsed.map(([r]) => r))
-  const minCol = Math.min(...parsed.map(([, c]) => c))
-  return parsed.map(([r, c]) => [r - minRow, c - minCol])
-}
-
-/**
- * Given the hovered cell index and which square the user grabbed,
- * compute all cell indices the piece would occupy.
- * The grabbed square is placed on the hovered cell; all others are relative to it.
- * Returns null if any cell falls out of bounds.
- */
 function getOccupiedCells(
   hoveredCellIndex: number,
-  offsets: Array<[number, number]>,
-  grabbedSquareIndex: number,
+  offsets: Square[],
   gridSize: number,
 ): number[] | null {
   const hoveredRow = Math.floor(hoveredCellIndex / gridSize)
   const hoveredCol = hoveredCellIndex % gridSize
-
-  // The grabbed square's offset relative to the piece's top-left
-  const [grabDr, grabDc] = offsets[grabbedSquareIndex]
-
   const cells: number[] = []
   for (const [dr, dc] of offsets) {
-    // Shift so the grabbed square aligns with the hovered cell
-    const r = hoveredRow + (dr - grabDr)
-    const c = hoveredCol + (dc - grabDc)
+    const r = hoveredRow + dr
+    const c = hoveredCol + dc
     if (r < 0 || r >= gridSize || c < 0 || c >= gridSize) return null
     cells.push(r * gridSize + c)
   }
   return cells
 }
 
+/** Pixel offset of a cell's top-left corner within the grid, accounting for gaps and border */
+function cellTopLeft(
+  cellIndex: number,
+  gridSize: number,
+  gridGap: number,
+): { x: number; y: number } {
+  const row = Math.floor(cellIndex / gridSize)
+  const col = cellIndex % gridSize
+
+  const innerPuzzle = PUZZLE_SIZE - BORDER_SIZE * 2
+  const gridGapTotal = (gridSize - 1) * gridGap
+  const cellSize = (innerPuzzle - gridGapTotal) / gridSize
+
+  return {
+    x: BORDER_SIZE + col * (cellSize + gridGap),
+    y: BORDER_SIZE + row * (cellSize + gridGap),
+  }
+}
+
 function Home() {
   const [gridSize, setGridSize] = useState<number>(4)
   const gridGap = Math.floor(50 / gridSize)
 
-  // Cell index where piece is placed after a successful drop (null = tray)
   const [placedAnchor, setPlacedAnchor] = useState<{
     cell: number
     squareIndex: number
+    topLeftCell: number
   } | null>(null)
-
-  // Cell index currently being hovered (-1 = none)
   const [hoverCell, setHoverCell] = useState<number>(-1)
+  const [isDragging, setIsDragging] = useState(false)
 
-  // Which square the user grabbed — use a ref so it's always current in dnd callbacks
+  const [squares, setSquares] = useState<Square[]>(INITIAL_SQUARES)
+  const [grabbedSquareIndex, setGrabbedSquareIndex] = useState<number>(0)
+
+  const squaresRef = useRef<Square[]>(INITIAL_SQUARES)
   const grabbedSquareIndexRef = useRef<number>(0)
 
-  const offsets = parseSquareOffsets(PIECE_SQUARES)
+  const handleSquaresChange = (next: Square[], newGrabbedIndex: number) => {
+    squaresRef.current = next
+    grabbedSquareIndexRef.current = newGrabbedIndex
+    setSquares(next)
+    setGrabbedSquareIndex(newGrabbedIndex)
+  }
 
-  // Cells the piece would occupy if dropped at hoverCell
+  const handleGrabSquare = (index: number) => {
+    grabbedSquareIndexRef.current = index
+    setGrabbedSquareIndex(index)
+  }
+
+  const currentOffsets = toOffsets(squares, grabbedSquareIndex)
+
   const previewCells =
     hoverCell >= 0
-      ? getOccupiedCells(
-          hoverCell,
-          offsets,
-          grabbedSquareIndexRef.current,
-          gridSize,
-        )
+      ? getOccupiedCells(hoverCell, currentOffsets, gridSize)
       : null
 
   const isValidDrop = previewCells !== null
 
-  // Currently occupied cells (where piece is placed)
   const occupiedCells =
     placedAnchor !== null
       ? getOccupiedCells(
           placedAnchor.cell,
-          offsets,
-          placedAnchor.squareIndex,
+          toOffsets(squares, placedAnchor.squareIndex),
           gridSize,
         )
       : null
@@ -112,41 +111,46 @@ function Home() {
     <Piece
       id={PIECE_ID}
       gridInfo={{ gridSize, gridGap }}
-      squares={PIECE_SQUARES}
+      squares={squares}
+      grabbedSquareIndex={grabbedSquareIndex}
       dropState={dropState}
-      onGrabSquare={(index) => {
-        grabbedSquareIndexRef.current = index
-      }}
+      onGrabSquare={handleGrabSquare}
+      onSquaresChange={handleSquaresChange}
     />
   )
 
   return (
     <DragDropProvider
+      onDragStart={() => setIsDragging(true)}
       onDragOver={(e) => {
         const targetId = e.operation.target?.id
         setHoverCell(typeof targetId === 'number' ? targetId : -1)
       }}
       onDragEnd={(e) => {
+        setIsDragging(false)
         setHoverCell(-1)
         if (e.canceled) return
         const targetId = e.operation.target?.id
-        console.log(targetId)
-        if (targetId === undefined) {
-          setPlacedAnchor(null)
-          return
-        }
         if (typeof targetId !== 'number') return
-        const cells = getOccupiedCells(
-          targetId,
-          offsets,
+        const offsets = toOffsets(
+          squaresRef.current,
           grabbedSquareIndexRef.current,
-          gridSize,
         )
-        if (cells)
+        const cells = getOccupiedCells(targetId, offsets, gridSize)
+        if (cells) {
+          const topLeftCell = cells.reduce((best, cell) => {
+            const bRow = Math.floor(best / gridSize)
+            const cRow = Math.floor(cell / gridSize)
+            if (cRow < bRow) return cell
+            if (cRow === bRow && cell % gridSize < best % gridSize) return cell
+            return best
+          })
           setPlacedAnchor({
             cell: targetId,
             squareIndex: grabbedSquareIndexRef.current,
+            topLeftCell,
           })
+        }
       }}
     >
       <div className="flex flex-row justify-center gap-6 items-center h-screen w-full bg-linear-to-br from-mauve-950 to-mauve-800 p-6">
@@ -174,8 +178,9 @@ function Home() {
             </span>
           </div>
 
+          {/* Grid — position:relative so the overlay is anchored to it */}
           <div
-            className="bg-mauve-700 border-mauve-500 grid"
+            className="relative bg-mauve-700 border-mauve-500 grid"
             style={{
               gridTemplateColumns: `repeat(${gridSize}, 1fr)`,
               gap: gridGap,
@@ -191,9 +196,7 @@ function Home() {
                   ? 'valid'
                   : 'invalid'
                 : 'none'
-
-              // Render piece at the first cell in occupiedCells (top-left of the placed piece)
-              const isPlacedOrigin = occupiedCells?.[0] === i
+              const isPlacedOrigin = placedAnchor?.topLeftCell === i
 
               return (
                 <Droppable key={i} id={i} highlight={highlight}>

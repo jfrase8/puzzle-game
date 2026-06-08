@@ -15,12 +15,12 @@ export default function Droppable({
   children,
   highlight = 'none',
 }: DroppableProps) {
-  const { ref, isDropTarget } = useDroppable({
+  const { ref, isDropTarget: isOver } = useDroppable({
     id,
     type: 'droppable',
   })
 
-  const highlightClass = isDropTarget
+  const highlightClass = isOver
     ? 'bg-mauve-600'
     : highlight === 'valid'
       ? 'bg-emerald-900/40'
